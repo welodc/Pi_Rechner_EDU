@@ -6,6 +6,11 @@
  */ 
 
 //#include <avr/io.h>
+#include "stdio.h"
+#include "stdlib.h"
+#include "stdbool.h"
+#include "math.h"
+
 #include "avr_compiler.h"
 #include "pmic_driver.h"
 #include "TC_driver.h"
@@ -29,13 +34,16 @@
 #include "ButtonHandler.h"
 
 
-#define DEMOBIT0	1 << 0
-#define DEMOBIT1	1 << 5
-EventGroupHandle_t xDemoEventGroup;
+#define CALCBIT0	1 << 0
+#define CALCBIT1	1 << 5
+EventGroupHandle_t xPiEventGroup;
 
 extern void vApplicationIdleHook( void );
-void vLedBlink(void *pvParameters);
+void vCalcPi(void *pvParameters);
 void vInterface(void *pvParameters);
+
+double PiRes = 0;
+char PiString[512] = "";
 
 TaskHandle_t ledTask;
 
@@ -51,31 +59,34 @@ int main(void)
     vInitClock();
     vInitDisplay();
     
-    xTaskCreate( vLedBlink, (const char *) "ledBlink", configMINIMAL_STACK_SIZE+10, NULL, 1, &ledTask);
-    xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE, NULL, 3, NULL);
+    xTaskCreate( vCalcPi, (const char *) "CalcPi", configMINIMAL_STACK_SIZE+300, NULL, 1, &ledTask);
+    xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE+100, NULL, 3, NULL);
 
     vDisplayClear();
-    vDisplayWriteStringAtPos(0,0,"FreeRTOS 10.0.1");
-    vDisplayWriteStringAtPos(1,0,"EDUBoard 1.0");
-    vDisplayWriteStringAtPos(2,0,"Template");
-    vDisplayWriteStringAtPos(3,0,"ResetReason: %d", reason);
+    vDisplayWriteStringAtPos(0,0,"Pi Rechner");
+    vDisplayWriteStringAtPos(1,0,"Zeit :");
+    vDisplayWriteStringAtPos(2,0,"Pi:");
     vTaskStartScheduler();
     return 0;
 }
 
 void vInterface(void *pvParameters) {
     int timecounter = 0;
-    xDemoEventGroup = xEventGroupCreate();
+    xPiEventGroup = xEventGroupCreate();
     initButtons();
     for(;;) {
+        
+        sprintf(PiString, "%f", PiRes);
+        vDisplayWriteStringAtPos(3,0,"%s", PiString);
+        
         updateButtons();
         timecounter++;
         if(getButtonPress(BUTTON1) == SHORT_PRESSED) {
-            xEventGroupSetBits(xDemoEventGroup, DEMOBIT0 );
+            xEventGroupSetBits(xPiEventGroup, CALCBIT0 );
             
         }
         if(getButtonPress(BUTTON2) == SHORT_PRESSED) {
-            xEventGroupClearBits(xDemoEventGroup, DEMOBIT0);
+            xEventGroupClearBits(xPiEventGroup, CALCBIT0);
             
         }
         if(getButtonPress(BUTTON3) == SHORT_PRESSED) {
@@ -105,30 +116,41 @@ void vInterface(void *pvParameters) {
     }
 }
 
-void vLedBlink(void *pvParameters) {
+void vCalcPi(void *pvParameters) {
     (void) pvParameters;
     uint32_t evBits = 0x00;
-    while( xDemoEventGroup == NULL ) {
+    while( xPiEventGroup == NULL ) {
         vTaskDelay(100/portTICK_RATE_MS);
     };
-    PORTF.DIRSET = PIN0_bm; /*LED1*/
-    PORTF.OUT = 0x01;
-    for(;;) {
-        // 		uint32_t stack = get_mem_unused();
-        // 		uint32_t heap = xPortGetFreeHeapSize();
-        // 		uint32_t taskStack = uxTaskGetStackHighWaterMark(ledTask);
-        // 		vDisplayClear();
-        // 		vDisplayWriteStringAtPos(0,0,"Stack: %d", stack);
-        // 		vDisplayWriteStringAtPos(1,0,"Heap: %d", heap);
-        // 		vDisplayWriteStringAtPos(2,0,"TaskStack: %d", taskStack);
-        // 		vDisplayWriteStringAtPos(3,0,"FreeSpace: %d", stack+heap);
-        evBits = xEventGroupGetBits(xDemoEventGroup);
-
-
-        if(evBits & DEMOBIT0 == DEMOBIT0) {
-            PORTF.OUTTGL = 0x01;
-        }
+        PORTF.DIRSET = PIN0_bm; /*LED1*/
+        PORTF.OUT = 0x01;
         
+        double j = 0;
+        double termnew = 1;
+        double termbuffer = 0;
+        
+        evBits = xEventGroupGetBits(xPiEventGroup);
+
+        for (;;){
+            evBits = xEventGroupGetBits(xPiEventGroup);
+            
+            if(evBits & CALCBIT0 == CALCBIT0) {   
+             int32_t i = 0;
+	         for(i=0;i<10;i++){
+                if(termnew == 1){
+                    j = 0;
+                   }else {
+                    j = termbuffer;
+                }
+                termbuffer = termnew;
+                termnew = termnew + ((termnew - j) * i)/(i + i + 1);
+                PiRes = termnew + termnew;
+               // sprintf(PiString, "%f" , termres);
+                //vDisplayWriteStringAtPos(3,0,"Pi: %s", PiString);
+                PORTF.OUTTGL = 0x01;
+            }
+            
+        }        
         vTaskDelay(100 / portTICK_RATE_MS);
-    }
+        }            
 }
