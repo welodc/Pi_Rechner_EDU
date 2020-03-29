@@ -32,6 +32,7 @@
 #include "NHD0420Driver.h"
 
 #include "ButtonHandler.h"
+#include "avr_f64.h"
 
 
 #define CALCBIT0	1 << 0
@@ -42,8 +43,7 @@ extern void vApplicationIdleHook( void );
 void vCalcPi(void *pvParameters);
 void vInterface(void *pvParameters);
 
-double PiRes = 0;
-char PiString[512] = "";
+char PiString[22] = "";
 
 TaskHandle_t ledTask;
 
@@ -59,8 +59,8 @@ int main(void)
     vInitClock();
     vInitDisplay();
     
-    xTaskCreate( vCalcPi, (const char *) "CalcPi", configMINIMAL_STACK_SIZE+300, NULL, 1, &ledTask);
-    xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE+100, NULL, 3, NULL);
+    xTaskCreate( vCalcPi, (const char *) "CalcPi", configMINIMAL_STACK_SIZE+500, NULL, 1, &ledTask);
+    xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE+300, NULL, 3, NULL);
 
     vDisplayClear();
     vDisplayWriteStringAtPos(0,0,"Pi Rechner");
@@ -76,8 +76,10 @@ void vInterface(void *pvParameters) {
     initButtons();
     for(;;) {
         
-        sprintf(PiString, "%f", PiRes);
+        
         vDisplayWriteStringAtPos(3,0,"%s", PiString);
+        
+        
         
         updateButtons();
         timecounter++;
@@ -125,9 +127,12 @@ void vCalcPi(void *pvParameters) {
         PORTF.DIRSET = PIN0_bm; /*LED1*/
         PORTF.OUT = 0x01;
         
-        double j = 0;
-        double termnew = 1;
-        double termbuffer = 0;
+        float64_t OldPiVal = f_sd(0);                     // Variable für den den Wert vor 2 Berechnungen
+        float64_t NewPiVal = f_sd(1);                     // Variable für den neuen Wert 
+        float64_t PiBuffer = f_sd(0);                     // Buffer für den vorherigen Wert
+        float64_t PiCalcVal = f_sd(0);                    // Variable Zähler
+        float64_t PiRes = f_sd(0);
+           
         
         evBits = xEventGroupGetBits(xPiEventGroup);
 
@@ -136,21 +141,32 @@ void vCalcPi(void *pvParameters) {
             
             if(evBits & CALCBIT0 == CALCBIT0) {   
              int32_t i = 0;
-	         for(i=0;i<10;i++){
-                if(termnew == 1){
-                    j = 0;
-                   }else {
-                    j = termbuffer;
-                }
-                termbuffer = termnew;
-                termnew = termnew + ((termnew - j) * i)/(i + i + 1);
-                PiRes = termnew + termnew;
-               // sprintf(PiString, "%f" , termres);
-                //vDisplayWriteStringAtPos(3,0,"Pi: %s", PiString);
-                PORTF.OUTTGL = 0x01;
+	         for(i=0;;i++){
+                if(NewPiVal == f_sd(1))
+                    {
+                    OldPiVal = f_sd(0);
+                    }
+                   else
+                    {
+                    OldPiVal = PiBuffer;
+                    }
+                // Neuer Wert wird  dem Buffer übergeben    
+                PiBuffer = NewPiVal;
+                
+                //NewPiVal = NewPiVal + ((NewPiVal - OldPiVal) * i)/(i + i + 1);
+                PiCalcVal = f_sub(NewPiVal,OldPiVal);
+                PiCalcVal = f_mult(PiCalcVal,f_sd(i));
+                PiCalcVal = f_div(PiCalcVal,f_sd(i+i+1));
+                NewPiVal = f_add(NewPiVal,PiCalcVal);
+                
+                PiRes = f_add(NewPiVal,NewPiVal);
+                
+                char* tempResultString = f_to_string(PiRes, 16, 16);
+                sprintf(PiString, "%s", tempResultString);
+                //PORTF.OUTTGL = 0x01;
             }
             
         }        
-        vTaskDelay(100 / portTICK_RATE_MS);
+        //vTaskDelay(100 / portTICK_RATE_MS);
         }            
 }
