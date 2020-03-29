@@ -39,6 +39,7 @@
 #define CALCBIT1	1 << 3
 #define CALCBIT2	1 << 5
 #define CALCBIT3	1 << 7
+#define CALCBIT4	1 << 8
 
 EventGroupHandle_t xPiEventGroup;
 
@@ -47,9 +48,11 @@ QueueHandle_t PiQueue;
 //Char Array für Ausgabe Resultat
 char PiString[20] = "";
 
+
 extern void vApplicationIdleHook( void );
 void vCalcPi(void *pvParameters);
 void vInterface(void *pvParameters);
+void vTimeCountTask(void *pvParameters);
 
 TaskHandle_t ledTask;
 
@@ -64,21 +67,58 @@ int main(void)
 
     vInitClock();
     vInitDisplay();
-    
+        
     xTaskCreate( vCalcPi, (const char *) "CalcPi", configMINIMAL_STACK_SIZE+500, NULL, 1, &ledTask);
-    xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE+300, NULL, 5, NULL);
+    xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE+300, NULL, 3, NULL);
+    xTaskCreate(vTimeCountTask, (const char *) "TCTask", configMINIMAL_STACK_SIZE+10, NULL, 4, NULL);
 
     PiQueue = xQueueCreate(1 , sizeof(uint32_t));
+    
     vDisplayClear();
-    //vDisplayWriteStringAtPos(0,0,"Pi Rechner");
-    //vDisplayWriteStringAtPos(1,0,"Zeit :");
-    //vDisplayWriteStringAtPos(2,0,"Pi:");
+    
     vTaskStartScheduler();
+    
+   
+    
     return 0;
 }
 
+void vTimeCountTask(void *pvParameters) {
+     
+     TC0_ConfigClockSource( &TCD0, TC_CLKSEL_OFF_gc ); // TC_CLKSEL_OFF_gc TC_CLKSEL_DIV1_gc
+     TC0_ConfigWGM(&TCD0, TC_WGMODE_NORMAL_gc);
+     TC_SetPeriod( &TCD0, 0x7CFF ); // 31999
+     TC0_SetOverflowIntLevel(&TCD0, TC_OVFINTLVL_MED_gc); // Auto restart on overflow.
+    
+    uint32_t evBits = 0x00;
+    uint8_t TenMs = 0x00;
+    uint8_t Seconds = 0x00;
+    char TString[6] = "";
+    
+    for (;;)
+    {
+        evBits = xEventGroupGetBits(xPiEventGroup);
+        
+        if((evBits & CALCBIT3) == CALCBIT3)
+        {
+            TenMs++;
+            xEventGroupClearBits(xPiEventGroup, CALCBIT3);
+        }
+        if(TenMs < 99)
+        {
+            Seconds++;
+            TenMs = 0x00;
+        }
+        
+        sprintf(TString, "%u.%.2u", Seconds, TenMs );
+        
+        vTaskDelay(10/portTICK_RATE_MS);
+    }
+  
+}  
+    
+
 void vInterface(void *pvParameters) {
-    int timecounter = 0;
     xPiEventGroup = xEventGroupCreate();
     initButtons();
     uint32_t evBits = 0x00;
@@ -119,7 +159,7 @@ void vInterface(void *pvParameters) {
         
         
         updateButtons();
-        timecounter++;
+        
         if(getButtonPress(BUTTON1) == SHORT_PRESSED) {
             xEventGroupSetBits(xPiEventGroup, CALCBIT0);
             xEventGroupClearBits(xPiEventGroup, CALCBIT1);
@@ -150,10 +190,6 @@ void vInterface(void *pvParameters) {
             
         }
 
-        if(timecounter >= 50) {
-            //Set Display
-            timecounter = 0;
-        }
         vTaskDelay(10/portTICK_RATE_MS);
     }
 }
@@ -232,5 +268,25 @@ void vCalcPi(void *pvParameters) {
         }        
         vTaskDelay(100 / portTICK_RATE_MS);
        } 
-   }              
+}  
+   
+ISR(TCD0_OVF_vect)
+{   
+    BaseType_t xHigherPriorityTaskWoken, xResult;
+   
+   static uint16_t test = 0x0000;
+   test++; 
+    // xHigherPriorityTaskWoken muss pdFALSE zugewiesen werden.
+    
+    xHigherPriorityTaskWoken = pdFALSE;
+    xResult = xEventGroupSetBitsFromISR(xPiEventGroup, CALCBIT3, &xHigherPriorityTaskWoken );
+    
+    // War die Sendung erfolgreich?
+    if( xResult == pdPASS )
+    {
+        //PortEnd zieht nun den empfangenden Task mit der höchsten Prio nach vorne
+        portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+    }
+}
+             
             
