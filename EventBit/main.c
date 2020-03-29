@@ -36,14 +36,20 @@
 
 
 #define CALCBIT0	1 << 0
-#define CALCBIT1	1 << 5
+#define CALCBIT1	1 << 3
+#define CALCBIT2	1 << 5
+#define CALCBIT3	1 << 7
+
 EventGroupHandle_t xPiEventGroup;
+
+QueueHandle_t PiQueue;
+
+//Char Array für Ausgabe Resultat
+char PiString[20] = "";
 
 extern void vApplicationIdleHook( void );
 void vCalcPi(void *pvParameters);
 void vInterface(void *pvParameters);
-
-char PiString[22] = "";
 
 TaskHandle_t ledTask;
 
@@ -60,12 +66,13 @@ int main(void)
     vInitDisplay();
     
     xTaskCreate( vCalcPi, (const char *) "CalcPi", configMINIMAL_STACK_SIZE+500, NULL, 1, &ledTask);
-    xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE+300, NULL, 3, NULL);
+    xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE+300, NULL, 5, NULL);
 
+    PiQueue = xQueueCreate(1 , sizeof(uint32_t));
     vDisplayClear();
-    vDisplayWriteStringAtPos(0,0,"Pi Rechner");
-    vDisplayWriteStringAtPos(1,0,"Zeit :");
-    vDisplayWriteStringAtPos(2,0,"Pi:");
+    //vDisplayWriteStringAtPos(0,0,"Pi Rechner");
+    //vDisplayWriteStringAtPos(1,0,"Zeit :");
+    //vDisplayWriteStringAtPos(2,0,"Pi:");
     vTaskStartScheduler();
     return 0;
 }
@@ -74,25 +81,58 @@ void vInterface(void *pvParameters) {
     int timecounter = 0;
     xPiEventGroup = xEventGroupCreate();
     initButtons();
+    uint32_t evBits = 0x00;
+    // Anzahl berchnungen
+    uint32_t LoopCount = 0x00000000;
+    //Char Array für Ausgabe Resultat
+    char LoopString[10] = "";
     for(;;) {
         
+        evBits = xEventGroupGetBits(xPiEventGroup);
         
-        vDisplayWriteStringAtPos(3,0,"%s", PiString);
+        vDisplayClear();
+        vDisplayWriteStringAtPos(0,0,"Pi Rechner");
+        vDisplayWriteStringAtPos(1,0,"Zeit :");
         
+        if(PiQueue != 0){
+            xQueueReceive(PiQueue, &LoopCount, ( TickType_t ) 5 );
+             sprintf(LoopString, "%lu", LoopCount);   
+                if((evBits & CALCBIT1) == CALCBIT1){
+                    if((evBits & CALCBIT0) == CALCBIT0){
+                        vDisplayWriteStringAtPos(2,0,"Anz. %s Pause", LoopString);
+                    }
+                    else{
+                        vDisplayWriteStringAtPos(2,0,"Anz. %s Reset", LoopString);
+                    }                        
+                }
+                
+                else if((evBits & CALCBIT2) == CALCBIT2){
+                    vDisplayWriteStringAtPos(2,0,"Anz. %s MAX", LoopString);
+                }
+                
+                else{
+                    vDisplayWriteStringAtPos(2,0,"Anz. %s", LoopString);
+                }
+            
+            vDisplayWriteStringAtPos(3,0,"%s", PiString);
+        }        
         
         
         updateButtons();
         timecounter++;
         if(getButtonPress(BUTTON1) == SHORT_PRESSED) {
-            xEventGroupSetBits(xPiEventGroup, CALCBIT0 );
-            
+            xEventGroupSetBits(xPiEventGroup, CALCBIT0);
+            xEventGroupClearBits(xPiEventGroup, CALCBIT1);
         }
         if(getButtonPress(BUTTON2) == SHORT_PRESSED) {
-            xEventGroupClearBits(xPiEventGroup, CALCBIT0);
+            xEventGroupSetBits(xPiEventGroup, CALCBIT1);
+            xEventGroupSetBits(xPiEventGroup, CALCBIT0);
             
         }
         if(getButtonPress(BUTTON3) == SHORT_PRESSED) {
-            
+           xEventGroupClearBits(xPiEventGroup, CALCBIT0);
+           xEventGroupSetBits(xPiEventGroup, CALCBIT1);
+           xEventGroupClearBits(xPiEventGroup, CALCBIT2); 
         }
         if(getButtonPress(BUTTON4) == SHORT_PRESSED) {
             
@@ -124,49 +164,73 @@ void vCalcPi(void *pvParameters) {
     while( xPiEventGroup == NULL ) {
         vTaskDelay(100/portTICK_RATE_MS);
     };
-        PORTF.DIRSET = PIN0_bm; /*LED1*/
-        PORTF.OUT = 0x01;
+        
+        uint32_t i = 0x00000000;
         
         float64_t OldPiVal = f_sd(0);                     // Variable für den den Wert vor 2 Berechnungen
         float64_t NewPiVal = f_sd(1);                     // Variable für den neuen Wert 
         float64_t PiBuffer = f_sd(0);                     // Buffer für den vorherigen Wert
         float64_t PiCalcVal = f_sd(0);                    // Variable Zähler
-        float64_t PiRes = f_sd(0);
+        float64_t PiRes = f_sd(0);                        // Variable fürs Resultat
            
         
-        evBits = xEventGroupGetBits(xPiEventGroup);
 
         for (;;){
             evBits = xEventGroupGetBits(xPiEventGroup);
             
-            if(evBits & CALCBIT0 == CALCBIT0) {   
-             int32_t i = 0;
-	         for(i=0;;i++){
-                if(NewPiVal == f_sd(1))
-                    {
-                    OldPiVal = f_sd(0);
-                    }
-                   else
-                    {
-                    OldPiVal = PiBuffer;
-                    }
-                // Neuer Wert wird  dem Buffer übergeben    
-                PiBuffer = NewPiVal;
-                
-                //NewPiVal = NewPiVal + ((NewPiVal - OldPiVal) * i)/(i + i + 1);
-                PiCalcVal = f_sub(NewPiVal,OldPiVal);
-                PiCalcVal = f_mult(PiCalcVal,f_sd(i));
-                PiCalcVal = f_div(PiCalcVal,f_sd(i+i+1));
-                NewPiVal = f_add(NewPiVal,PiCalcVal);
-                
-                PiRes = f_add(NewPiVal,NewPiVal);
-                
-                char* tempResultString = f_to_string(PiRes, 16, 16);
-                sprintf(PiString, "%s", tempResultString);
-                //PORTF.OUTTGL = 0x01;
+            if((evBits & CALCBIT0) != CALCBIT0) { 
+                // Reset der Variablen
+                 i = 0x00000000;
+                 
+                 xQueueSend(PiQueue, &i, ( TickType_t ) 0 );
+                 
+                 OldPiVal = f_sd(0);                     
+                 NewPiVal = f_sd(1);                     
+                 PiBuffer = f_sd(0);                     
+                 PiCalcVal = f_sd(0);                    
+                 PiRes = f_sd(0);
+                 char* tempResultString = f_to_string(PiRes, 18, 18);
+                 sprintf(PiString, "Pi:%s", tempResultString);
+            // if Reset}
             }
-            
+            else{
+                                   
+                if ((i<0xFFFFFFFE))
+                {
+	                 for(;(i<0xFFFFFFFE)&((evBits & CALCBIT1) != CALCBIT1);i++){
+                        evBits = xEventGroupGetBits(xPiEventGroup);
+                        if(NewPiVal == f_sd(1))
+                            {
+                            OldPiVal = f_sd(0);
+                            }
+                           else
+                            {
+                            OldPiVal = PiBuffer;
+                            }
+                        // Neuer Wert wird  dem Buffer übergeben    
+                        PiBuffer = NewPiVal;
+                
+                        //NewPiVal = NewPiVal + ((NewPiVal - OldPiVal) * i)/(i + i + 1);
+                        PiCalcVal = f_sub(NewPiVal,OldPiVal);
+                        PiCalcVal = f_mult(PiCalcVal,f_sd(i));
+                        PiCalcVal = f_div(PiCalcVal,f_sd(i+i+1));
+                        NewPiVal = f_add(NewPiVal,PiCalcVal);
+                
+                        PiRes = f_add(NewPiVal,NewPiVal);
+                        
+                        xQueueSend(PiQueue, &i, ( TickType_t ) 0 );
+                
+                        char* tempResultString = f_to_string(PiRes, 18, 18);
+                        sprintf(PiString, "Pi:%s", tempResultString);
+                    // For Rechnung              
+                    }
+            //if Max ereicht
+            }
+            else{ 
+              xEventGroupSetBits(xPiEventGroup, CALCBIT2 );
+            }                                                           
         }        
-        //vTaskDelay(100 / portTICK_RATE_MS);
-        }            
-}
+        vTaskDelay(100 / portTICK_RATE_MS);
+       } 
+   }              
+            
