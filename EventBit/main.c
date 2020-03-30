@@ -34,19 +34,25 @@
 #include "ButtonHandler.h"
 #include "avr_f64.h"
 
-
+//Start und Reset Bit
 #define CALCBIT0	1 << 0
-#define CALCBIT1	1 << 3
-#define CALCBIT2	1 << 5
-#define CALCBIT3	1 << 7
-#define CALCBIT4	1 << 8
+//Pause Bit        
+#define CALCBIT1	1 << 1
+//Calc Max. Bit
+#define CALCBIT2	1 << 2
+//Timer Startbit
+#define CALCBIT3	1 << 3
+//Timer Stoppbit
+#define CALCBIT4	1 << 4
 
 EventGroupHandle_t xPiEventGroup;
 
 QueueHandle_t PiQueue;
 
-//Char Array für Ausgabe Resultat
+//String für Ausgabe Resultat
 char PiString[20] = "";
+//Zeitzähler
+float TimeCounter = 0.0000000000;
 
 
 extern void vApplicationIdleHook( void );
@@ -54,7 +60,6 @@ void vCalcPi(void *pvParameters);
 void vInterface(void *pvParameters);
 void vTimeCountTask(void *pvParameters);
 
-TaskHandle_t ledTask;
 
 void vApplicationIdleHook( void )
 {
@@ -63,14 +68,14 @@ void vApplicationIdleHook( void )
 
 int main(void)
 {
-    resetReason_t reason = getResetReason();
-
     vInitClock();
     vInitDisplay();
         
-    xTaskCreate( vCalcPi, (const char *) "CalcPi", configMINIMAL_STACK_SIZE+500, NULL, 1, &ledTask);
-    xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE+300, NULL, 3, NULL);
-    xTaskCreate(vTimeCountTask, (const char *) "TCTask", configMINIMAL_STACK_SIZE+10, NULL, 4, NULL);
+    xTaskCreate( vCalcPi, (const char *) "CalcPi", configMINIMAL_STACK_SIZE+500, NULL, 1, NULL);
+    xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE+300, NULL, 2, NULL);
+    xTaskCreate(vTimeCountTask, (const char *) "TCTask", configMINIMAL_STACK_SIZE+20, NULL, 2, NULL);
+
+    
 
     PiQueue = xQueueCreate(1 , sizeof(uint32_t));
     
@@ -87,32 +92,46 @@ void vTimeCountTask(void *pvParameters) {
      
      TC0_ConfigClockSource( &TCD0, TC_CLKSEL_OFF_gc ); // TC_CLKSEL_OFF_gc TC_CLKSEL_DIV1_gc
      TC0_ConfigWGM(&TCD0, TC_WGMODE_NORMAL_gc);
-     TC_SetPeriod( &TCD0, 0x7CFF ); // 31999
+     TC_SetPeriod( &TCD0, 0x07CF ); // 31999
      TC0_SetOverflowIntLevel(&TCD0, TC_OVFINTLVL_MED_gc); // Auto restart on overflow.
     
     uint32_t evBits = 0x00;
-    uint8_t TenMs = 0x00;
-    uint8_t Seconds = 0x00;
-    char TString[6] = "";
-    
+
     for (;;)
     {
         evBits = xEventGroupGetBits(xPiEventGroup);
         
         if((evBits & CALCBIT3) == CALCBIT3)
         {
-            TenMs++;
-            xEventGroupClearBits(xPiEventGroup, CALCBIT3);
+                if((evBits & CALCBIT1) == CALCBIT1)
+            {
+                TC0_ConfigClockSource( &TCD0, TC_CLKSEL_OFF_gc );
+            }
+            else
+            {
+                if ((evBits & CALCBIT4) != CALCBIT4)
+                {
+                    TC0_ConfigClockSource( &TCD0, TC_CLKSEL_DIV1_gc );
+                    xEventGroupSetBits(xPiEventGroup, CALCBIT0); 
+                }
+                else
+                {
+                    TC0_ConfigClockSource( &TCD0, TC_CLKSEL_OFF_gc ); 
+                    xEventGroupSetBits(xPiEventGroup, CALCBIT0);
+                    xEventGroupClearBits(xPiEventGroup, CALCBIT3);
+                }
+            }           
         }
-        if(TenMs < 99)
+        
+        if ((evBits & CALCBIT4) == CALCBIT4)
         {
-            Seconds++;
-            TenMs = 0x00;
+            vTaskDelay(100/portTICK_RATE_MS);
+        }
+        else
+        {
+            vTaskDelay(5/portTICK_RATE_MS);
         }
         
-        sprintf(TString, "%u.%.2u", Seconds, TenMs );
-        
-        vTaskDelay(10/portTICK_RATE_MS);
     }
   
 }  
@@ -121,18 +140,27 @@ void vTimeCountTask(void *pvParameters) {
 void vInterface(void *pvParameters) {
     xPiEventGroup = xEventGroupCreate();
     initButtons();
+    
     uint32_t evBits = 0x00;
+    
     // Anzahl berchnungen
     uint32_t LoopCount = 0x00000000;
     //Char Array für Ausgabe Resultat
     char LoopString[10] = "";
+    //Char Array für die Zeitausgabe
+    char TimeString[7] = "";
+    
+    
     for(;;) {
         
         evBits = xEventGroupGetBits(xPiEventGroup);
         
         vDisplayClear();
+        
         vDisplayWriteStringAtPos(0,0,"Pi Rechner");
-        vDisplayWriteStringAtPos(1,0,"Zeit :");
+        
+        sprintf(TimeString, "%.3f", TimeCounter);
+        vDisplayWriteStringAtPos(1,0,"Zeit :%s s", TimeString);
         
         if(PiQueue != 0){
             xQueueReceive(PiQueue, &LoopCount, ( TickType_t ) 5 );
@@ -161,12 +189,12 @@ void vInterface(void *pvParameters) {
         updateButtons();
         
         if(getButtonPress(BUTTON1) == SHORT_PRESSED) {
-            xEventGroupSetBits(xPiEventGroup, CALCBIT0);
+            xEventGroupSetBits(xPiEventGroup, CALCBIT3);
             xEventGroupClearBits(xPiEventGroup, CALCBIT1);
         }
         if(getButtonPress(BUTTON2) == SHORT_PRESSED) {
             xEventGroupSetBits(xPiEventGroup, CALCBIT1);
-            xEventGroupSetBits(xPiEventGroup, CALCBIT0);
+            xEventGroupSetBits(xPiEventGroup, CALCBIT3);
             
         }
         if(getButtonPress(BUTTON3) == SHORT_PRESSED) {
@@ -272,21 +300,7 @@ void vCalcPi(void *pvParameters) {
    
 ISR(TCD0_OVF_vect)
 {   
-    BaseType_t xHigherPriorityTaskWoken, xResult;
-   
-   static uint16_t test = 0x0000;
-   test++; 
-    // xHigherPriorityTaskWoken muss pdFALSE zugewiesen werden.
-    
-    xHigherPriorityTaskWoken = pdFALSE;
-    xResult = xEventGroupSetBitsFromISR(xPiEventGroup, CALCBIT3, &xHigherPriorityTaskWoken );
-    
-    // War die Sendung erfolgreich?
-    if( xResult == pdPASS )
-    {
-        //PortEnd zieht nun den empfangenden Task mit der höchsten Prio nach vorne
-        portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
-    }
+   TimeCounter = TimeCounter +0.001;   
 }
              
             
